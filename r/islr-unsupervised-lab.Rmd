@@ -1,10 +1,256 @@
-# 0 - prep ----------------------------------------------------------------
-# Load packages
+---
+title: "ISLR Unsupervised Learning Lab"
+output: 
+  html_notebook:
+    theme: readable
+    toc: true
+---
+
+# 0 - Preparation
+
+First up load packages that will be used as part of the lab, and set `knitr` options.
+
+```{r message = F, warning = F}
 library(ISLR)
+library(tidyverse)
+library(ggrepel)
+library(ggdendro)
+
+knitr::opts_chunk$set(fig.align = 'center')
+```
+
+# 1 - Principal Components Analysis
+
+## PCA data
+
+This lab uses the `USArrests` dataset, part of base R. Let's take a look.
+
+```{r}
+?USArrests
+usarrests <- USArrests
+
+usarrests
+```
+
+Gruesome: violent crime rate (per 100,000 residents) by US state for 1973 only.
+
+Check the mean of each variable (as PCA sensitive to differences). I'll use `summarise_all()` from the `tidyverse` (rather than `apply()`) as it returns a table (whereas `apply()` returns a vector).
+
+```{r}
+summarise_all(usarrests, mean)
+```
+
+They're all very different, assault much higher than either rape or murder. Let's check the variances, too.
+
+```{r}
+summarise_all(usarrests, var)
+```
+
+Very large differnces in variance, too. So we'll need to make sure the variables are scaled for PCA to work properly. If we don't the Assault variable will account for the vast majority of the variance in the data. 
+
+## PCA function
+
+To scale, we'll subtract the mean and divide by the standard deviation of each variable to _standardise_ it before performing PCA. We can do this, though, inside the function for PCA:
+
+```{r}
+?prcomp
+pca <- prcomp(usarrests, scale = TRUE)
+pca
+```
+
+We can also see what else is available from the output:
+
+```{r}
+names(pca)
+```
+
+From ISLR (or from `?prcomp`), we know these are:
+
+* `sdev` - standard deviations of the principal components
+* `rotation` - the matric of variable loadings (the eigenvectors of each principal component)
+* `centre` & `scale` - the means and standard deviations of tehe variables _before_ PCA
+* `x` - the value of the rotated data (centred and scaled data multipled by the rotation matrix (`rotation`))
+
+There are 4 principal components. This is expected due to the general rule that there are $\min(n-1, p)$ informative principal components in data with $n$ observations and $p$ variables.
+
+## PCA plots
+
+Let's look at the first two principal components. The `scale = 0` argument ensures that the arrows in the plot are scaled to represent the loadings (the principal components).
+
+```{r}
+biplot(pca, scale = 0)
+```
+
+Maybe we could also recreate this with `ggplot2()` and `ggrepel()` for the labels?
+
+```{r}
+pca$x %>%
+  as.data.frame() %>% 
+  rownames_to_column(var = "state") %>% 
+  ggplot(aes(PC1, PC2)) +
+  geom_point() +
+  geom_text_repel(aes(label = state)) +
+  theme_minimal()
+```
+
+Yes we can - a much nicer plot. But we've lost the arrows showing the original variables.
+
+There's also this function I adapted from that found online [here](http://stackoverflow.com/questions/6578355/plotting-pca-biplot-with-ggplot2), though, which _will_ add the arrows.
+
+```{r}
+PCbiplot <- function(PC, x="PC1", y="PC2") {
+    # PC being a prcomp object
+    data <- data.frame(obsnames = row.names(PC$x), PC$x)
+    
+    # Make the base plot
+    base_plot <- ggplot(data, aes_string(x = x, y = y)) + 
+      geom_point() +
+      geom_text_repel(alpha = .4, size = 3, aes(label = obsnames))
+    
+    # Get the principal components data
+    datapc <- data.frame(varnames = rownames(PC$rotation), PC$rotation)
+    
+    # Figure out the multiplier for the vectors for plottin the PC's
+    mult <- min(
+        (max(data[,y]) - min(data[,y])/(max(datapc[,y])-min(datapc[,y]))),
+        (max(data[,x]) - min(data[,x])/(max(datapc[,x])-min(datapc[,x])))
+        )
+    
+    # Transform to get the data to plot
+    datapc <- transform(datapc,
+            v1 = .7 * mult * (get(x)),
+            v2 = .7 * mult * (get(y))
+            )
+    
+    # Add the variable names
+    plot <- base_plot + 
+      coord_equal() + 
+      geom_text(data=datapc, aes(x=v1, y=v2, label=varnames), size = 5, vjust=1, color="red")
+    
+    # Add the lines and arrows
+    plot <- plot + 
+      geom_segment(data = datapc, aes(x = 0, y = 0, xend = v1, yend = v2), 
+                   arrow = arrow(length = unit(0.2, "cm")), 
+                   alpha = 0.75, color = "red")
+    
+    # Make and style the plot
+    plot + theme_minimal()
+}
+
+PCbiplot(pca, x = "PC1", y = "PC2")
+```
+
+## PCA explains
+
+We have the standard deviation of each principal component, squaring will get the variance:
+
+```{r}
+vars <- pca$sdev ^ 2
+vars
+```
+
+So we can calculate the percentage of _total_ variance explained by each PC easily:
+
+```{r}
+vars / sum(vars)
+```
+
+Looks like most (~85%) is explained by the first two:
+
+```{r}
+cumsum(vars/sum(vars))
+```
+
+Let's plot that (I'll use `ggplot2()` again:
+
+```{r}
+pve <- tibble(pc = paste0("PC", 1:4),
+              explained = vars/sum(vars)) %>% 
+  mutate(total_explained = cumsum(explained))
+
+points <- pve %>% 
+  ggplot(aes(pc, explained)) +
+  geom_point() +
+  labs(x = "Principal Component",
+       y = "Proportion of variance explained",
+       title = "Proportion of variance explained\nby each principal component") +
+  theme_minimal()
+
+cumulative <- pve %>% 
+  ggplot(aes(pc, total_explained, group = 1)) +
+  geom_line() +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(x = "Principal Component",
+       y = "Proportion total variance explained",
+       title = "Cumulative proportion of variance explained\nby each principal component") +
+  theme_minimal()
+
+cowplot::plot_grid(points, cumulative)
+```
+
+# 2 - Clustering
+
+## Heirarchical clustering
+
+Hierarchical clustering is implemented using the `dist()` and `hclust()` functions in `R`. `dist()` computes the distance between all observations and `hclust()` performs the clustering.
+
+Let's try it on the `USArrets` data again. `dist()` defaults to the Euclidean distance.
+
+```{r}
+distances <- dist(usarrests)
+```
+
+
+Then perform the clustering with a complete linkage.
+
+```{r}
+hc <- hclust(distances, method = "complete")
+hc
+```
+
+It's then easy to plot the dendrogram with the `plot()` base function.
+
+```{r}
+plot(hc, 
+     main = "Complete Linkage Hierarchical Clustering",
+     xlab = "")
+```
+
+We can also get a simple `ggplot2` dendrogram with `ggdendro`:
+
+```{r}
+ggdendrogram(hc, rotate = F, size = 2) +
+  labs(title = "Complete Linkage Hierarchical Clustering")
+```
+
+`ggraph` also has support for `hclust()` objects. I'll test that out later.
+
+To determine the _clusters_ generated by `hclust()`, we need to cut the tree, with `cutree()`. We can either specify the desired number of groups, or the height at which to cut. Let's try cutting at height 250, looking at the dendrogram that should produce just 2 clusters. Let's do the same thing, but _set_ $k$ to be 2, and see if we get the same answer.
+
+```{r}
+clusters_h250 <- cutree(hc, h = 250)
+clusters_k2 <- cutree(hc, k = 2)
+all.equal(clusters_h250, clusters_k2)
+```
+
+We do. Nice. 
+
+When developing clustering approaches in the future, given that pre-determinin $k$ up front is very hard, it may be easiest to simply display the tree and let a user (i.e. the person interested in the answer from the clustering) decide on how many clusters to select.
+
+
+## Determine the cluster.
+
+Say we have a new state, like the UK. How do we find which US state(s) it is most similar to?
+
+* If we had used $k$-means we could find the centroid (cluster) which the new observation was closest to and assign it to that?
+* For heirarchical clustering, I don't think this will work, we'd need to compute the new distance matric and heirarchical clustering again.
 
 
 
-# 1 - PCA -----------------------------------------------------------------
+
+
+
+
 
 
 
