@@ -3,7 +3,7 @@ title: "ISLR Unsupervised Learning Lab"
 output: 
   html_notebook:
     theme: readable
-    toc: true
+    toc: yes
 ---
 
 # 0 - Preparation
